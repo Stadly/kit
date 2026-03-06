@@ -98,8 +98,6 @@ function generate_app_types(manifest_data, config) {
 	/** @type {string[]} */
 	const layouts = [];
 
-	let has_matchers = false;
-
 	for (const route of manifest_data.routes) {
 		if (route.params.length > 0) {
 			const params = route.params.map((p) => {
@@ -108,7 +106,6 @@ function generate_app_types(manifest_data, config) {
 					: 'string';
 				return `${p.name}${p.optional ? '?:' : ':'} ${type}`;
 			});
-			if (route.params.some((p) => p.matcher)) has_matchers = true;
 			const route_type = `${s(route.id)}: { ${params.join('; ')} }`;
 
 			dynamic_routes.push(route_type);
@@ -139,8 +136,6 @@ function generate_app_types(manifest_data, config) {
 			}
 		}
 
-		if (Array.from(child_params.values()).some((v) => v.matcher)) has_matchers = true;
-
 		const layout_params = Array.from(child_params)
 			.map(([name, { optional, matcher }]) => {
 				const type = matcher
@@ -156,13 +151,13 @@ function generate_app_types(manifest_data, config) {
 
 	const assets = manifest_data.assets.map((asset) => s('/' + asset.file));
 
-	const matcher_type = has_matchers
-		? '\t// @ts-ignore\n\ttype MatcherParam<M> = M extends (param : string) => param is infer U ? U extends string ? U : string : string;\n\n\t'
-		: '\t';
-
 	return [
 		'declare module "$app/types" {',
-		`${matcher_type}export interface AppTypes {`,
+		// TS complains on infer U, which seems weird, therefore ts-ignore it
+		'\t// @ts-ignore',
+		'\ttype MatcherParam<M> = M extends (param : string) => param is infer U ? U extends string ? U : string : string;',
+		'',
+		'\texport interface AppTypes {',
 		`\t\tRouteId(): ${manifest_data.routes.map((r) => s(r.id)).join(' | ')};`,
 		`\t\tRouteParams(): {\n\t\t\t${dynamic_routes.join(';\n\t\t\t')}\n\t\t};`,
 		`\t\tLayoutParams(): {\n\t\t\t${layouts.join(';\n\t\t\t')}\n\t\t};`,
