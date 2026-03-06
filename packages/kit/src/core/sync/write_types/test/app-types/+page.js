@@ -21,6 +21,19 @@ params.foo;
 params.bar; // okay
 params.baz; // okay
 
+/** @type {import('$app/types').RouteParams<'/matcher-test/[[locale=locale]]'>} */
+const matcherParams = {};
+
+if (matcherParams.locale) {
+	// locale should be narrowed to "en" | "nb", not plain string
+	/** @type {"en" | "nb"} */
+	const locale = matcherParams.locale;
+	locale; // used
+}
+
+// @ts-expect-error locale should be "en" | "nb", not a generic string
+matcherParams.locale = 'fr';
+
 /** @type {import('$app/types').Pathname} */
 let pathname;
 

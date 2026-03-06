@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { GENERATED_COMMENT } from '../../constants.js';
+import { posixify } from '../../utils/filesystem.js';
 import { write_if_changed } from './utils.js';
 import { s } from '../../utils/misc.js';
 import { get_route_segments } from '../../utils/routing.js';
@@ -81,8 +82,13 @@ export {};
 /**
  * Generate app types interface extension
  * @param {import('types').ManifestData} manifest_data
+ * @param {import('types').ValidatedKitConfig} config
  */
-function generate_app_types(manifest_data) {
+function generate_app_types(manifest_data, config) {
+	/** @param {string} matcher */
+	const path_to_matcher = (matcher) =>
+		posixify(path.relative(config.outDir, path.join(config.files.params, matcher + '.js')));
+
 	/** @type {Set<string>} */
 	const pathnames = new Set();
 
@@ -92,9 +98,17 @@ function generate_app_types(manifest_data) {
 	/** @type {string[]} */
 	const layouts = [];
 
+	let has_matchers = false;
+
 	for (const route of manifest_data.routes) {
 		if (route.params.length > 0) {
-			const params = route.params.map((p) => `${p.name}${p.optional ? '?:' : ':'} string`);
+			const params = route.params.map((p) => {
+				const type = p.matcher
+					? `MatcherParam<typeof import('${path_to_matcher(p.matcher)}').match>`
+					: 'string';
+				return `${p.name}${p.optional ? '?:' : ':'} ${type}`;
+			});
+			if (route.params.some((p) => p.matcher)) has_matchers = true;
 			const route_type = `${s(route.id)}: { ${params.join('; ')} }`;
 
 			dynamic_routes.push(route_type);
@@ -112,19 +126,28 @@ function generate_app_types(manifest_data) {
 			}
 		}
 
-		/** @type {Map<string, boolean>} */
-		const child_params = new Map(route.params.map((p) => [p.name, p.optional]));
+		/** @type {Map<string, { optional: boolean, matcher: string }>} */
+		const child_params = new Map(
+			route.params.map((p) => [p.name, { optional: p.optional, matcher: p.matcher }])
+		);
 
 		for (const child of manifest_data.routes.filter((r) => r.id.startsWith(route.id))) {
 			for (const p of child.params) {
 				if (!child_params.has(p.name)) {
-					child_params.set(p.name, true); // always optional
+					child_params.set(p.name, { optional: true, matcher: p.matcher }); // always optional
 				}
 			}
 		}
 
+		if (Array.from(child_params.values()).some((v) => v.matcher)) has_matchers = true;
+
 		const layout_params = Array.from(child_params)
-			.map(([name, optional]) => `${name}${optional ? '?:' : ':'} string`)
+			.map(([name, { optional, matcher }]) => {
+				const type = matcher
+					? `MatcherParam<typeof import('${path_to_matcher(matcher)}').match>`
+					: 'string';
+				return `${name}${optional ? '?:' : ':'} ${type}`;
+			})
 			.join('; ');
 
 		const layout_type = `${s(route.id)}: ${layout_params.length > 0 ? `{ ${layout_params} }` : 'Record<string, never>'}`;
@@ -133,9 +156,13 @@ function generate_app_types(manifest_data) {
 
 	const assets = manifest_data.assets.map((asset) => s('/' + asset.file));
 
+	const matcher_type = has_matchers
+		? '\t// @ts-ignore\n\ttype MatcherParam<M> = M extends (param : string) => param is infer U ? U extends string ? U : string : string;\n\n\t'
+		: '\t';
+
 	return [
 		'declare module "$app/types" {',
-		'\texport interface AppTypes {',
+		`${matcher_type}export interface AppTypes {`,
 		`\t\tRouteId(): ${manifest_data.routes.map((r) => s(r.id)).join(' | ')};`,
 		`\t\tRouteParams(): {\n\t\t\t${dynamic_routes.join(';\n\t\t\t')}\n\t\t};`,
 		`\t\tLayoutParams(): {\n\t\t\t${layouts.join(';\n\t\t\t')}\n\t\t};`,
@@ -153,7 +180,7 @@ function generate_app_types(manifest_data) {
  * @param {import('types').ManifestData} manifest_data
  */
 export function write_non_ambient(config, manifest_data) {
-	const app_types = generate_app_types(manifest_data);
+	const app_types = generate_app_types(manifest_data, config);
 	const content = [template, app_types].join('\n\n');
 
 	write_if_changed(path.join(config.outDir, 'non-ambient.d.ts'), content);
